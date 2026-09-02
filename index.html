@@ -30,32 +30,11 @@ var blob = new Blob([JSON.stringify(manifest)], {type:'application/json'});
 var url  = URL.createObjectURL(blob);
 document.getElementById('manifest-placeholder').href = url;
 
-// Register service worker inline
+// Register service worker
 if('serviceWorker' in navigator){
-  var swCode = `
-const CACHE = 'bajeti-v1';
-self.addEventListener('install', function(e){
-  e.waitUntil(caches.open(CACHE).then(function(c){ return c.addAll(['.']); }));
-  self.skipWaiting();
-});
-self.addEventListener('activate', function(e){
-  e.waitUntil(clients.claim());
-});
-self.addEventListener('fetch', function(e){
-  e.respondWith(
-    caches.match(e.request).then(function(r){
-      return r || fetch(e.request).then(function(resp){
-        var rc = resp.clone();
-        caches.open(CACHE).then(function(c){ c.put(e.request, rc); });
-        return resp;
-      }).catch(function(){ return caches.match('.'); });
-    })
-  );
-});`;
-  var swBlob = new Blob([swCode], {type:'application/javascript'});
-  var swUrl  = URL.createObjectURL(swBlob);
-  navigator.serviceWorker.register(swUrl).catch(function(){});
+  navigator.serviceWorker.register('./sw.js').catch(function(e){ console.log('SW error:',e); });
 }
+
 </script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
@@ -195,6 +174,46 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}
 </style>
 </head>
 <body>
+
+<!-- PIN LOCK SCREEN -->
+<div id="lockScreen" style="display:none;position:fixed;inset:0;background:var(--bg);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 30px;">
+  <div style="font-size:48px;margin-bottom:16px;">🔐</div>
+  <h2 style="font-size:22px;font-weight:700;color:var(--green);margin-bottom:8px;">Bajeti Yangu</h2>
+  <p style="font-size:13px;color:var(--text-dim);margin-bottom:32px;text-align:center;" id="lockMsg">Ingiza PIN yako</p>
+
+  <!-- PIN dots -->
+  <div style="display:flex;gap:14px;margin-bottom:32px;" id="pinDots">
+    <div class="pin-dot" id="dot0"></div>
+    <div class="pin-dot" id="dot1"></div>
+    <div class="pin-dot" id="dot2"></div>
+    <div class="pin-dot" id="dot3"></div>
+  </div>
+
+  <!-- Keypad -->
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;width:100%;max-width:280px;">
+    <button class="pin-key" onclick="pinKey('1')">1</button>
+    <button class="pin-key" onclick="pinKey('2')">2</button>
+    <button class="pin-key" onclick="pinKey('3')">3</button>
+    <button class="pin-key" onclick="pinKey('4')">4</button>
+    <button class="pin-key" onclick="pinKey('5')">5</button>
+    <button class="pin-key" onclick="pinKey('6')">6</button>
+    <button class="pin-key" onclick="pinKey('7')">7</button>
+    <button class="pin-key" onclick="pinKey('8')">8</button>
+    <button class="pin-key" onclick="pinKey('9')">9</button>
+    <button class="pin-key" onclick="pinKey('del')" style="font-size:20px;">⌫</button>
+    <button class="pin-key" onclick="pinKey('0')">0</button>
+    <button class="pin-key" onclick="pinKey('ok')" style="background:var(--green);color:#0f2318;">OK</button>
+  </div>
+  <p id="pinSetupMsg" style="font-size:11px;color:var(--text-dim);margin-top:24px;text-align:center;display:none;"></p>
+</div>
+
+<style>
+.pin-dot{width:16px;height:16px;border-radius:50%;border:2px solid var(--border);background:transparent;transition:background 0.2s;}
+.pin-dot.filled{background:var(--green);border-color:var(--green);}
+.pin-dot.error{background:var(--red);border-color:var(--red);}
+.pin-key{padding:18px;border-radius:50%;border:1px solid var(--border);background:var(--surface);color:var(--text);font-family:inherit;font-size:20px;font-weight:600;cursor:pointer;transition:background 0.15s;}
+.pin-key:active{background:var(--surface2);}
+</style>
 <header>
   <div class="logo-area"><h1>Bajeti Yangu</h1><p>Simamia fedha zako</p></div>
   <div class="month-label" id="monthLabel"></div>
@@ -325,6 +344,9 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}
   <div class="mipaka-item"><label>🌟 Kikomo cha Starehe (TZS)</label><input type="number" id="set-starehe" placeholder="eg. 150000" inputmode="numeric"></div>
   <div class="mipaka-item"><label>🏦 Lengo la Akiba (TZS)</label><input type="number" id="set-akiba" placeholder="eg. 100000" inputmode="numeric"></div>
   <button class="btn-primary" id="btn-save-limits">Hifadhi Mipaka</button>
+  <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);">
+    <button onclick="changePIN()" style="width:100%;padding:13px;background:transparent;border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-dim);font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;">🔐 Badilisha PIN ya Usalama</button>
+  </div>
 </div>
 
 <!-- MODAL -->
@@ -380,7 +402,8 @@ function offsetToYM(offset){
   var d = new Date();
   d.setDate(1);
   d.setMonth(d.getMonth() + offset);
-  return d.toISOString().slice(0,7);
+  var m = d.getMonth()+1;
+  return d.getFullYear()+'-'+(m<10?'0':'')+m;
 }
 function offsetToLabel(offset){
   var d = new Date();
@@ -390,7 +413,7 @@ function offsetToLabel(offset){
 }
 
 function initMonthNav(){
-  var now = new Date().toISOString().slice(0,7);
+  var now = new Date(); var nowYM = now.getFullYear()+'-'+(now.getMonth()<9?'0':'')+(now.getMonth()+1);
 
   document.getElementById('hist-prev').addEventListener('click', function(){
     histOffset--; renderHistory();
@@ -412,28 +435,24 @@ function initMonthNav(){
 }
 
 // ---- EXPORT CSV ----
-document.getElementById('btn-export') && document.getElementById('btn-export').addEventListener('click', function(){
+function exportCSV(){
   var ym    = offsetToYM(ripOffset);
-  var label = offsetToLabel(ripOffset);
   var recs  = state.records.filter(function(r){ return r.type!=='pool' && r.date && r.date.startsWith(ym); });
-
   if(!recs.length){ showToast('Hakuna data ya kuexport','err'); return; }
-
   var csv = 'Tarehe,Aina,Kategoria,Maelezo,Kiasi (TZS)\n';
   recs.sort(function(a,b){ return a.date.localeCompare(b.date); }).forEach(function(r){
     var aina = r.type==='income'?'Mapato':'Matumizi';
-    csv += [r.date, aina, r.cat, '"'+(r.desc||'')+ '"', r.amount].join(',') + '\n';
+    csv += [r.date, aina, r.cat, '"'+(r.desc||'')+'"', r.amount].join(',') + '\n';
   });
-
   var blob = new Blob(['\uFEFF'+csv], {type:'text/csv;charset=utf-8;'});
-  var url  = URL.createObjectURL(blob);
-  var a    = document.createElement('a');
-  a.href     = url;
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
   a.download = 'BajetiYangu_'+ym+'.csv';
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  document.body.removeChild(a);
   showToast('✓ CSV imepakiwa','ok');
-});
+}
 
 // ---- NAVIGATION ----
 var PAGES = ['home','rekodi','historia','ripoti','mipaka'];
@@ -490,7 +509,7 @@ function buildSelect(selId, t, currentVal){
 
 // ---- CALC POOLS ----
 function calcPools(){
-  var ym = new Date().toISOString().slice(0,7);
+  var now = new Date(); var ym = now.getFullYear()+'-'+(now.getMonth()<9?'0':'')+(now.getMonth()+1);
   var recs = state.records.filter(function(r){ return r.date && r.date.startsWith(ym); });
 
   var totalIncome  = 0;
@@ -828,7 +847,8 @@ function renderRipoti(){
 
   var balance  = totalIncome - totalExpense;
   var daysInMonth = new Date(selDate.getFullYear(), selDate.getMonth()+1, 0).getDate();
-  var isCurrentMonth = (ym === now.toISOString().slice(0,7));
+  var nowYM2 = now.getFullYear()+'-'+(now.getMonth()<9?'0':'')+(now.getMonth()+1);
+  var isCurrentMonth = (ym === nowYM2);
   var daysPassed  = isCurrentMonth ? now.getDate() : daysInMonth;
   var daysLeft    = isCurrentMonth ? daysInMonth - now.getDate() : 0;
 
@@ -958,33 +978,115 @@ function showToast(msg,type){
   setTimeout(function(){ t.classList.remove('show'); },2500);
 }
 
+// ---- PIN LOCK ----
+var PIN_KEY     = 'bajeti_pin';
+var pinEntry    = '';
+var pinMode     = 'login'; // 'login' | 'setup' | 'confirm'
+var pinFirst    = '';
+
+function initLock(){
+  var savedPin = localStorage.getItem(PIN_KEY);
+  var lock = document.getElementById('lockScreen');
+  if(!savedPin){
+    // First time — setup PIN
+    pinMode = 'setup';
+    document.getElementById('lockMsg').textContent = 'Tengeneza PIN yako ya siri (nambari 4)';
+    document.getElementById('pinSetupMsg').style.display = 'block';
+    document.getElementById('pinSetupMsg').textContent = 'PIN itakulinda data yako';
+    lock.style.display = 'flex';
+  } else {
+    // Login
+    pinMode = 'login';
+    document.getElementById('lockMsg').textContent = 'Ingiza PIN yako';
+    lock.style.display = 'flex';
+  }
+}
+
+function pinKey(k){
+  if(k === 'del'){
+    pinEntry = pinEntry.slice(0, -1);
+  } else if(k === 'ok'){
+    submitPin();
+    return;
+  } else {
+    if(pinEntry.length >= 4) return;
+    pinEntry += k;
+  }
+  updateDots();
+  if(pinEntry.length === 4) setTimeout(submitPin, 150);
+}
+
+function updateDots(){
+  for(var i=0;i<4;i++){
+    var dot = document.getElementById('dot'+i);
+    dot.className = 'pin-dot' + (i < pinEntry.length ? ' filled' : '');
+  }
+}
+
+function submitPin(){
+  var savedPin = localStorage.getItem(PIN_KEY);
+  if(pinMode === 'login'){
+    if(pinEntry === savedPin){
+      document.getElementById('lockScreen').style.display = 'none';
+    } else {
+      shakeDots();
+      document.getElementById('lockMsg').textContent = 'PIN si sahihi — jaribu tena';
+      pinEntry = ''; updateDots();
+    }
+  } else if(pinMode === 'setup'){
+    if(pinEntry.length < 4){ return; }
+    pinFirst = pinEntry;
+    pinEntry = '';
+    pinMode  = 'confirm';
+    document.getElementById('lockMsg').textContent = 'Thibitisha PIN yako';
+    document.getElementById('pinSetupMsg').textContent = 'Ingiza PIN tena kuthibitisha';
+    updateDots();
+  } else if(pinMode === 'confirm'){
+    if(pinEntry === pinFirst){
+      localStorage.setItem(PIN_KEY, pinEntry);
+      document.getElementById('lockScreen').style.display = 'none';
+      showToast('✓ PIN imewekwa salama','ok');
+    } else {
+      shakeDots();
+      pinFirst = ''; pinEntry = ''; pinMode = 'setup';
+      document.getElementById('lockMsg').textContent = 'PIN hazilingani — anza upya';
+      document.getElementById('pinSetupMsg').textContent = 'Ingiza PIN mpya';
+      updateDots();
+    }
+  }
+}
+
+function shakeDots(){
+  var wrap = document.getElementById('pinDots');
+  wrap.style.animation = 'none';
+  for(var i=0;i<4;i++) document.getElementById('dot'+i).className='pin-dot error';
+  setTimeout(function(){ for(var i=0;i<4;i++) document.getElementById('dot'+i).className='pin-dot'; }, 500);
+}
+
+// Option to change PIN in mipaka page
+function changePIN(){
+  localStorage.removeItem(PIN_KEY);
+  pinEntry=''; pinFirst=''; pinMode='setup';
+  document.getElementById('lockMsg').textContent='Tengeneza PIN mpya';
+  document.getElementById('pinSetupMsg').style.display='block';
+  document.getElementById('pinSetupMsg').textContent='Weka PIN yako mpya';
+  updateDots();
+  document.getElementById('lockScreen').style.display='flex';
+}
+
 // ---- INIT ----
 (function(){
   var now=new Date();
   document.getElementById('monthLabel').textContent=now.toLocaleDateString('sw-TZ',{month:'long',year:'numeric'});
-  document.getElementById('inp-date').value=now.toISOString().split('T')[0];
+  var y=now.getFullYear(), mo=now.getMonth()+1, d=now.getDate();
+  document.getElementById('inp-date').value=y+'-'+(mo<10?'0':'')+mo+'-'+(d<10?'0':'')+d;
   setType('income');
   loadLimitInputs();
   initMonthNav();
+  initLock();
+  document.getElementById('btn-export').addEventListener('click', exportCSV);
   renderHome();
   renderHistory();
-  // Wire export button
-  document.getElementById('btn-export').addEventListener('click', function(){
-    var ym    = offsetToYM(ripOffset);
-    var recs  = state.records.filter(function(r){ return r.type!=='pool' && r.date && r.date.startsWith(ym); });
-    if(!recs.length){ showToast('Hakuna data ya kuexport','err'); return; }
-    var csv = 'Tarehe,Aina,Kategoria,Maelezo,Kiasi (TZS)\n';
-    recs.sort(function(a,b){ return a.date.localeCompare(b.date); }).forEach(function(r){
-      var aina = r.type==='income'?'Mapato':'Matumizi';
-      csv += [r.date, aina, r.cat, '"'+(r.desc||'')+'"', r.amount].join(',') + '\n';
-    });
-    var blob = new Blob(['\uFEFF'+csv], {type:'text/csv;charset=utf-8;'});
-    var a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'BajetiYangu_'+ym+'.csv';
-    a.click();
-    showToast('✓ CSV imepakiwa','ok');
-  });
 })();
 </script>
 </body>
